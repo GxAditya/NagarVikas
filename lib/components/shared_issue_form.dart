@@ -309,7 +309,9 @@ class _SharedIssueFormState extends State<SharedIssueForm> {
 
   Future<void> _submitForm() async {
     setState(() => _mediaError = null);
-    if (_formKey.currentState!.validate() && (_selectedImage != null || _selectedVideo != null)) {
+    if (_formKey.currentState != null && 
+        _formKey.currentState!.validate() && 
+        (_selectedImage != null || _selectedVideo != null)) {
       setState(() => _isUploading = true);
 
       try {

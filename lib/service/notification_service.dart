@@ -168,35 +168,169 @@ class NotificationService {
   }
 
   // Admin notification methods
-  Future<void> saveAdminFCMToken(String adminUid, String token) async {
+  Future<bool> saveAdminFCMToken(String adminUid, String token) async {
+    // Input validation
+    if (adminUid.isEmpty) {
+      throw ArgumentError('Admin UID cannot be empty');
+    }
+    
+    if (token.isEmpty) {
+      throw ArgumentError('FCM token cannot be empty');
+    }
+    
+    // Validate UID format (basic Firebase UID format check)
+    if (adminUid.length < 10 || adminUid.length > 128) {
+      throw ArgumentError('Invalid admin UID format');
+    }
+    
+    // Validate token format (basic FCM token format check)
+    if (!token.startsWith(RegExp(r'[a-zA-Z0-9_-]{100,}'))) {
+      throw ArgumentError('Invalid FCM token format');
+    }
+    
     try {
+      // Get current user for authentication
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) {
+        throw Exception('No authenticated user found');
+      }
+      
+      // Verify the current user has permission to update this admin's token
+      // This could be checking if the user is the admin themselves or has admin privileges
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .get();
+          
+      if (!userDoc.exists) {
+        throw Exception('User document not found');
+      }
+      
+      final userData = userDoc.data();
+      final userRole = userData?['role'] as String?;
+      
+      // Allow if the user is updating their own token or is an admin
+      if (currentUser.uid != adminUid && userRole != 'admin') {
+        throw Exception('Insufficient permissions to update admin FCM token');
+      }
+      
+      // Verify the admin exists in the database
+      final adminDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(adminUid)
+          .get();
+          
+      if (!adminDoc.exists) {
+        throw Exception('Admin user not found');
+      }
+      
+      final adminData = adminDoc.data();
+      final adminRole = adminData?['role'] as String?;
+      
+      if (adminRole != 'admin') {
+        throw Exception('Specified user is not an admin');
+      }
+      
+      // All validations passed, save the token
       DatabaseReference adminRef = FirebaseDatabase.instance.ref("admins/$adminUid/fcmToken");
       await adminRef.set(token);
-      print("Admin FCM Token saved successfully for $adminUid");
-    } catch (error) {
-      print("Error saving admin FCM token: $error");
+      
+      // Also update in Firestore for consistency
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(adminUid)
+          .update({'fcmToken': token});
+          
+      return true;
+    } on ArgumentError catch (e) {
+      // Re-throw validation errors
+      throw ArgumentError('Validation error: ${e.message}');
+    } on FirebaseException catch (e) {
+      // Handle Firebase-specific errors
+      throw Exception('Database error: ${e.message}');
+    } catch (e) {
+      // Handle other unexpected errors
+      throw Exception('Failed to save admin FCM token: ${e.toString()}');
     }
   }
 
-  Future<List<String>> getAdminFCMTokens() async {
+  Future<List<String>> getAdminFCMTokens({int limit = 50, String? lastAdminId}) async {
     try {
-      DatabaseReference adminsRef = FirebaseDatabase.instance.ref("admins");
-      DatabaseEvent event = await adminsRef.once();
+      // Use Firestore instead of Realtime Database for better type safety and pagination
+      Query query = _firestore
+          .collection('users')
+          .where('role', isEqualTo: 'admin')
+          .where('isActive', isEqualTo: true)
+          .orderBy(FieldPath.documentId)
+          .limit(limit);
       
-      List<String> tokens = [];
-      if (event.snapshot.exists) {
-        Map<dynamic, dynamic> adminsData = event.snapshot.value as Map<dynamic, dynamic>;
+      // Implement cursor-based pagination if lastAdminId is provided
+      if (lastAdminId != null) {
+        query = query.startAfter([lastAdminId]);
+      }
+      
+      final QuerySnapshot snapshot = await query.get();
+      
+      final List<String> tokens = [];
+      
+      for (final doc in snapshot.docs) {
+        final adminData = doc.data() as Map<String, dynamic>;
+        final token = adminData['fcmToken'] as String?;
         
-        adminsData.forEach((adminId, adminData) {
-          if (adminData is Map && adminData['fcmToken'] != null) {
-            tokens.add(adminData['fcmToken']);
+        if (token != null && token.isNotEmpty) {
+          // Validate token format before adding
+          if (_isValidFCMToken(token)) {
+            tokens.add(token);
           }
-        });
+        }
       }
       
       return tokens;
-    } catch (error) {
-      print("Error fetching admin FCM tokens: $error");
+    } on FirebaseException catch (e) {
+      print("Firebase error fetching admin FCM tokens: ${e.message}");
+      return [];
+    } catch (e) {
+      print("Error fetching admin FCM tokens: ${e.toString()}");
+      return [];
+    }
+  }
+  
+  // Helper method to validate FCM token format
+  bool _isValidFCMToken(String token) {
+    // Basic FCM token validation - typically 152-180 chars, alphanumeric with specific chars
+    final tokenRegex = RegExp(r'^[a-zA-Z0-9:_-]{100,}$');
+    return tokenRegex.hasMatch(token);
+  }
+  
+  // Alternative method to get tokens with explicit type safety
+  Future<List<String>> getAdminFCMTokensSafe() async {
+    try {
+      final QuerySnapshot snapshot = await _firestore
+          .collection('users')
+          .where('role', isEqualTo: 'admin')
+          .where('isActive', isEqualTo: true)
+          .get();
+      
+      final List<String> tokens = [];
+      
+      for (final doc in snapshot.docs) {
+        final adminData = doc.data() as Map<String, dynamic>;
+        
+        // Extract data with type safety
+        final String? fcmToken = adminData['fcmToken'] as String?;
+        final bool? isActive = adminData['isActive'] as bool?;
+        final String? role = adminData['role'] as String?;
+        
+        // Validate admin status and token
+        if (role == 'admin' && isActive == true && 
+            fcmToken != null && _isValidFCMToken(fcmToken)) {
+          tokens.add(fcmToken);
+        }
+      }
+      
+      return tokens;
+    } catch (e) {
+      print("Error fetching admin FCM tokens: $e");
       return [];
     }
   }
@@ -207,70 +341,58 @@ class NotificationService {
     Map<String, dynamic>? data,
   }) async {
     try {
-      List<String> adminTokens = await getAdminFCMTokens();
-      
-      if (adminTokens.isEmpty) {
-        print("No admin tokens found for push notification");
-        return;
-      }
+      final admins = await _firestore
+          .collection('users')
+          .where('role', isEqualTo: 'admin')
+          .where('isActive', isEqualTo: true)
+          .get();
 
-      // Get FCM server key from environment variables
-      final String serverKey = dotenv.env['FCM_SERVER_KEY'] ?? '';
-      
-      if (serverKey.isEmpty) {
-        print("FCM_SERVER_KEY not found in environment variables");
-        return;
+      for (final admin in admins.docs) {
+        final token = admin.data()['fcmToken'] as String?;
+        if (token != null && token.isNotEmpty) {
+          await _sendNotificationToBackend(
+            token: token,
+            title: title,
+            body: body,
+            data: data,
+          );
+        }
       }
-      
-      for (String token in adminTokens) {
-        await _sendFCMNotification(
-          token: token,
-          title: title,
-          body: body,
-          data: data,
-          serverKey: serverKey,
-        );
-      }
-    } catch (error) {
-      print("Error sending push notification to admins: $error");
+    } catch (e) {
+      print("Error sending notifications to admins: $e");
     }
   }
 
-  Future<void> _sendFCMNotification({
+  Future<void> _sendNotificationToBackend({
     required String token,
     required String title,
     required String body,
     Map<String, dynamic>? data,
-    required String serverKey,
   }) async {
     try {
       final response = await http.post(
-        Uri.parse('https://fcm.googleapis.com/fcm/send'),
+        Uri.parse('https://your-backend-api.com/api/notifications/send'),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'key=$serverKey',
+          'Authorization': 'Bearer YOUR_USER_TOKEN', // User authentication token
         },
         body: jsonEncode({
-          'to': token,
-          'notification': {
-            'title': title,
-            'body': body,
-            'sound': 'default',
-            'badge': '1',
-          },
+          'targetToken': token,
+          'title': title,
+          'body': body,
           'data': data ?? {},
           'priority': 'high',
         }),
       );
 
       if (response.statusCode == 200) {
-        print("FCM notification sent successfully");
+        print("Notification request sent to backend successfully");
       } else {
-        print("Failed to send FCM notification: ${response.statusCode}");
+        print("Failed to send notification request: ${response.statusCode}");
         print("Response: ${response.body}");
       }
     } catch (error) {
-      print("Error sending FCM notification: $error");
+      print("Error sending notification request: $error");
     }
   }
 

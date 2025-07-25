@@ -58,17 +58,77 @@ class _AdminDashboardState extends State<AdminDashboard> {
     super.dispose();
   }
 
-  // Register admin FCM token for push notifications
+  // Register admin FCM token for push notifications with security checks
   Future<void> _registerAdminFCMToken() async {
+    const int maxRetries = 3;
+    const Duration retryDelay = Duration(seconds: 2);
+    
     try {
-      User? user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        final NotificationService notificationService = NotificationService();
-        await notificationService.saveAdminFCMToken(user.uid);
-        print("Admin FCM token registered successfully");
+      final User? user = FirebaseAuth.instance.currentUser;
+      
+      // Verify user authentication
+      if (user == null) {
+        debugPrint("Admin FCM registration failed: No authenticated user");
+        return;
       }
+      
+      // Verify email verification
+      if (!user.emailVerified) {
+        debugPrint("Admin FCM registration failed: Email not verified");
+        return;
+      }
+      
+      // Verify admin privileges
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+          
+      if (!userDoc.exists) {
+        debugPrint("Admin FCM registration failed: User document not found");
+        return;
+      }
+      
+      final userData = userDoc.data();
+      final role = userData?['role'] as String?;
+      
+      if (role != 'admin') {
+        debugPrint("Admin FCM registration failed: User is not an admin");
+        return;
+      }
+      
+      // Initialize notification service with null safety
+      final NotificationService? notificationService = NotificationService();
+      if (notificationService == null) {
+        debugPrint("Admin FCM registration failed: NotificationService initialization failed");
+        return;
+      }
+      
+      // Retry logic for network failures
+      int attempts = 0;
+      while (attempts < maxRetries) {
+        try {
+          await notificationService.saveAdminFCMToken(user.uid);
+          debugPrint("Admin FCM token registered successfully");
+          return;
+        } catch (e) {
+          attempts++;
+          debugPrint("Admin FCM registration attempt $attempts failed: $e");
+          
+          if (attempts >= maxRetries) {
+            debugPrint("Admin FCM registration failed after $maxRetries attempts");
+            // TODO: Replace debugPrint with proper logging service in production
+            return;
+          }
+          
+          // Wait before retry
+          await Future.delayed(retryDelay * attempts);
+        }
+      }
+      
     } catch (e) {
-      print("Error registering admin FCM token: $e");
+      debugPrint("Critical error in admin FCM registration: $e");
+      // TODO: Replace debugPrint with proper logging service in production
     }
   }
 

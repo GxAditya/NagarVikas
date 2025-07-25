@@ -15,7 +15,9 @@
   "main": "index.js",
   "dependencies": {
     "firebase-admin": "^11.11.0",
-    "firebase-functions": "^4.5.0"
+    "firebase-functions": "^4.5.0",
+    "axios": "^1.4.0",
+    "retry-axios": "^3.0.0"
   },
   "devDependencies": {
     "eslint": "^8.15.0",

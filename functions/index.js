@@ -1,5 +1,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
+const axios = require('axios');
+const { rax } = require('retry-axios');
 
 admin.initializeApp();
 
@@ -219,6 +221,86 @@ exports.handleTokenRefresh = functions.database
       return null;
     } catch (error) {
       console.error('Error in handleTokenRefresh function:', error);
+      return null;
+    }
+  });
+
+// Function to send notification to all admins when a new complaint is created
+exports.sendNewComplaintNotificationToAdmins = functions.database
+  .ref('/complaints/{complaintId}')
+  .onCreate(async (snapshot, context) => {
+    const complaint = snapshot.val();
+    const complaintId = context.params.complaintId;
+
+    try {
+      // 1. Get all admin users
+      const usersSnapshot = await admin.database().ref('/users').once('value');
+      const users = usersSnapshot.val();
+      const adminTokens = [];
+
+      if (users) {
+        for (const userId in users) {
+          if (users[userId].isAdmin === true && users[userId].fcmToken) {
+            adminTokens.push(users[userId].fcmToken);
+          }
+        }
+      }
+
+      if (adminTokens.length === 0) {
+        console.log('No admin users with FCM tokens found. No notification sent.');
+        return null;
+      }
+
+      // 2. Construct the notification message using FCM HTTP v1 API format
+      const message = {
+        notification: {
+          title: 'New Complaint Registered',
+          body: `A new complaint has been registered: ${complaint.issue_type}`,
+        },
+        data: {
+          complaintId: complaintId,
+          click_action: 'FLUTTER_NOTIFICATION_CLICK',
+        },
+      };
+
+      // 3. Get OAuth2 access token
+      const accessToken = await admin.credential.applicationDefault().getAccessToken();
+
+      // 4. Send notification to each admin with timeout and retry
+      const sendPromises = adminTokens.map(token => {
+        const fcmMessage = { ...message, token };
+
+        const axiosInstance = axios.create({
+          headers: {
+            'Authorization': `Bearer ${accessToken.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          // Add timeout to the request
+          timeout: 10000, // 10 seconds timeout
+        });
+
+        // Attach retry-axios interceptor
+        rax(axiosInstance);
+
+        return axiosInstance.post(
+          `https://fcm.googleapis.com/v1/projects/${process.env.GCLOUD_PROJECT}/messages:send`,
+          { message: fcmMessage }
+        );
+      });
+
+      const responses = await Promise.allSettled(sendPromises);
+
+      responses.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          console.log(`Successfully sent notification to admin with token: ${adminTokens[index]}`);
+        } else {
+          console.error(`Failed to send notification to admin with token: ${adminTokens[index]}`, result.reason);
+        }
+      });
+
+      return null;
+    } catch (error) {
+      console.error('Error in sendNewComplaintNotificationToAdmins function:', error);
       return null;
     }
   });

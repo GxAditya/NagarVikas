@@ -30,11 +30,25 @@ void main() async {
   // ✅ Ensures Flutter is initialized before any Firebase code
   WidgetsFlutterBinding.ensureInitialized();
   
-  // ✅ Load environment variables
-  await dotenv.load(fileName: ".env");
- 
-  // ✅ OneSignal push notification setup
-  OneSignal.initialize("70614e6d-8bbf-4ac1-8f6d-b261a128059c");
+  // ✅ Load environment variables with error handling
+  try {
+    await dotenv.load(fileName: ".env");
+    print("Environment variables loaded successfully");
+  } catch (e) {
+    print("Warning: Failed to load .env file: $e");
+    print("App will continue with default/fallback values");
+    // Continue app execution - use fallback values for development
+  }
+
+  // ✅ OneSignal push notification setup with environment variable
+  final String oneSignalAppId = dotenv.env['ONESIGNAL_APP_ID'] ?? '';
+  if (oneSignalAppId.isNotEmpty) {
+    OneSignal.initialize(oneSignalAppId);
+    print("OneSignal initialized with app ID from environment");
+  } else {
+    print("Warning: ONESIGNAL_APP_ID not found in environment variables");
+    print("Push notifications will not be available");
+  }
   OneSignal.Notifications.requestPermission(true);
 
   // ✅ Set up notification opened handler
