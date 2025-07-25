@@ -1,7 +1,11 @@
 import 'dart:ui';
-
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
@@ -161,5 +165,131 @@ class NotificationService {
 
   Future<void> cancelNotification(int id) async {
     await _flutterLocalNotificationsPlugin.cancel(id);
+  }
+
+  // Admin notification methods
+  Future<void> saveAdminFCMToken(String adminUid, String token) async {
+    try {
+      DatabaseReference adminRef = FirebaseDatabase.instance.ref("admins/$adminUid/fcmToken");
+      await adminRef.set(token);
+      print("Admin FCM Token saved successfully for $adminUid");
+    } catch (error) {
+      print("Error saving admin FCM token: $error");
+    }
+  }
+
+  Future<List<String>> getAdminFCMTokens() async {
+    try {
+      DatabaseReference adminsRef = FirebaseDatabase.instance.ref("admins");
+      DatabaseEvent event = await adminsRef.once();
+      
+      List<String> tokens = [];
+      if (event.snapshot.exists) {
+        Map<dynamic, dynamic> adminsData = event.snapshot.value as Map<dynamic, dynamic>;
+        
+        adminsData.forEach((adminId, adminData) {
+          if (adminData is Map && adminData['fcmToken'] != null) {
+            tokens.add(adminData['fcmToken']);
+          }
+        });
+      }
+      
+      return tokens;
+    } catch (error) {
+      print("Error fetching admin FCM tokens: $error");
+      return [];
+    }
+  }
+
+  Future<void> sendPushNotificationToAdmins({
+    required String title,
+    required String body,
+    Map<String, dynamic>? data,
+  }) async {
+    try {
+      List<String> adminTokens = await getAdminFCMTokens();
+      
+      if (adminTokens.isEmpty) {
+        print("No admin tokens found for push notification");
+        return;
+      }
+
+      // Get FCM server key from environment variables
+      final String serverKey = dotenv.env['FCM_SERVER_KEY'] ?? '';
+      
+      if (serverKey.isEmpty) {
+        print("FCM_SERVER_KEY not found in environment variables");
+        return;
+      }
+      
+      for (String token in adminTokens) {
+        await _sendFCMNotification(
+          token: token,
+          title: title,
+          body: body,
+          data: data,
+          serverKey: serverKey,
+        );
+      }
+    } catch (error) {
+      print("Error sending push notification to admins: $error");
+    }
+  }
+
+  Future<void> _sendFCMNotification({
+    required String token,
+    required String title,
+    required String body,
+    Map<String, dynamic>? data,
+    required String serverKey,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('https://fcm.googleapis.com/fcm/send'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'key=$serverKey',
+        },
+        body: jsonEncode({
+          'to': token,
+          'notification': {
+            'title': title,
+            'body': body,
+            'sound': 'default',
+            'badge': '1',
+          },
+          'data': data ?? {},
+          'priority': 'high',
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        print("FCM notification sent successfully");
+      } else {
+        print("Failed to send FCM notification: ${response.statusCode}");
+        print("Response: ${response.body}");
+      }
+    } catch (error) {
+      print("Error sending FCM notification: $error");
+    }
+  }
+
+  Future<void> notifyAdminsOfNewComplaint({
+    required String issueType,
+    required String location,
+    required String userName,
+    required String complaintId,
+  }) async {
+    await sendPushNotificationToAdmins(
+      title: "🚨 New Complaint Filed",
+      body: "$userName reported: $issueType in $location",
+      data: {
+        'type': 'new_complaint',
+        'complaint_id': complaintId,
+        'issue_type': issueType,
+        'location': location,
+        'user_name': userName,
+      },
+    );
   }
 }

@@ -345,6 +345,26 @@ class _SharedIssueFormState extends State<SharedIssueForm> {
           'status': 'Pending',
         });
 
+        // Get user details for admin notification
+        final user = FirebaseAuth.instance.currentUser;
+        String userName = 'A user';
+        if (user != null) {
+          final userSnapshot = await FirebaseDatabase.instance
+              .ref("users/${user.uid}")
+              .get();
+          if (userSnapshot.exists) {
+            userName = userSnapshot.child('name').value?.toString() ?? 'A user';
+          }
+        }
+
+        // Send push notification to admins
+        await _notificationService.notifyAdminsOfNewComplaint(
+          issueType: widget.issueType,
+          location: '${_selectedCity}, ${_selectedState}',
+          userName: userName,
+          complaintId: ref.key!,
+        );
+
         await _notificationService.showComplaintSubmittedNotification(
           issueType: widget.issueType,
           complaintId: ref.key,

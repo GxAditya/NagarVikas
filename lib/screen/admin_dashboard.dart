@@ -6,6 +6,7 @@ import 'dart:async';
 import './ComplaintDetailPage.dart';
 import 'login_page.dart';
 import 'package:NagarVikas/screen/analytics_dashboard.dart';
+import 'package:NagarVikas/service/notification_service.dart';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -47,6 +48,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
   void initState() {
     super.initState();
     _fetchComplaints();
+    _registerAdminFCMToken(); // Call _registerAdminFCMToken in initState
   }
 
   @override
@@ -54,6 +56,20 @@ class _AdminDashboardState extends State<AdminDashboard> {
     _complaintsSubscription?.cancel();
     searchController.dispose();
     super.dispose();
+  }
+
+  // Register admin FCM token for push notifications
+  Future<void> _registerAdminFCMToken() async {
+    try {
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final NotificationService notificationService = NotificationService();
+        await notificationService.saveAdminFCMToken(user.uid);
+        print("Admin FCM token registered successfully");
+      }
+    } catch (e) {
+      print("Error registering admin FCM token: $e");
+    }
   }
 
   Future<void> _fetchComplaints() async {
