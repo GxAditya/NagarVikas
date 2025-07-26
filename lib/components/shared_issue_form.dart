@@ -309,8 +309,10 @@ class _SharedIssueFormState extends State<SharedIssueForm> {
 
   Future<void> _submitForm() async {
     setState(() => _mediaError = null);
-    if (_formKey.currentState != null && 
-        _formKey.currentState!.validate() && 
+
+    final formState = _formKey.currentState;
+    if (formState != null &&
+        formState.validate() &&
         (_selectedImage != null || _selectedVideo != null)) {
       setState(() => _isUploading = true);
 
@@ -386,9 +388,17 @@ class _SharedIssueFormState extends State<SharedIssueForm> {
         setState(() => _isUploading = false);
       }
     } else {
+      if (formState == null) {
+        Fluttertoast.showToast(
+            msg: "Form state unavailable. Please reopen the form and try again.");
+      } else if (!formState.validate()) {
+        Fluttertoast.showToast(msg: "Please fix the highlighted form errors.");
+      }
+
       if (_selectedImage == null && _selectedVideo == null) {
         setState(() => _mediaError = "Please upload a valid image or video.");
       }
+      return;
     }
   }
 

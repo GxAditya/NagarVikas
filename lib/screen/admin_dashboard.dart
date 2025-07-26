@@ -7,6 +7,10 @@ import './ComplaintDetailPage.dart';
 import 'login_page.dart';
 import 'package:NagarVikas/screen/analytics_dashboard.dart';
 import 'package:NagarVikas/service/notification_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -79,10 +83,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
       }
       
       // Verify admin privileges
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
           
       if (!userDoc.exists) {
         debugPrint("Admin FCM registration failed: User document not found");
@@ -97,12 +97,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
         return;
       }
       
-      // Initialize notification service with null safety
-      final NotificationService? notificationService = NotificationService();
-      if (notificationService == null) {
-        debugPrint("Admin FCM registration failed: NotificationService initialization failed");
-        return;
-      }
+      // Initialize notification service
+      final NotificationService notificationService = NotificationService();
       
       // Retry logic for network failures
       int attempts = 0;

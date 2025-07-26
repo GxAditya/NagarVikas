@@ -4,13 +4,16 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
   NotificationService._internal();
+
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -232,9 +235,8 @@ class NotificationService {
       }
       
       // All validations passed, save the token
-      DatabaseReference adminRef = FirebaseDatabase.instance.ref("admins/$adminUid/fcmToken");
-      await adminRef.set(token);
-      
+
+
       // Also update in Firestore for consistency
       await FirebaseFirestore.instance
           .collection('users')
@@ -257,7 +259,7 @@ class NotificationService {
   Future<List<String>> getAdminFCMTokens({int limit = 50, String? lastAdminId}) async {
     try {
       // Use Firestore instead of Realtime Database for better type safety and pagination
-      Query query = _firestore
+      Query query = FirebaseFirestore.instance
           .collection('users')
           .where('role', isEqualTo: 'admin')
           .where('isActive', isEqualTo: true)
@@ -370,11 +372,34 @@ class NotificationService {
     Map<String, dynamic>? data,
   }) async {
     try {
+      // Validate notification content before sending
+      if (title.trim().isEmpty) {
+        throw ArgumentError('Notification title cannot be empty');
+      }
+      if (body.trim().isEmpty) {
+        throw ArgumentError('Notification body cannot be empty');
+      }
+      if (data != null && data.keys.any((k) => k.toString().trim().isEmpty)) {
+        throw ArgumentError('Notification data contains empty keys');
+      }
+
+      // Read backend base URL from environment variables
+      final backendBaseUrl = dotenv.env['BACKEND_API_URL'];
+      if (backendBaseUrl == null || backendBaseUrl.isEmpty) {
+        throw Exception('BACKEND_API_URL is not set in environment variables');
+      }
+
+      final uri = Uri.parse('$backendBaseUrl/notifications/send');
+
+      // Retrieve Firebase user auth token at runtime
+      final user = FirebaseAuth.instance.currentUser;
+      final String? authToken = user != null ? await user.getIdToken() : null;
+
       final response = await http.post(
-        Uri.parse('https://your-backend-api.com/api/notifications/send'),
+        uri,
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer YOUR_USER_TOKEN', // User authentication token
+          if (authToken != null) 'Authorization': 'Bearer $authToken',
         },
         body: jsonEncode({
           'targetToken': token,

@@ -234,16 +234,21 @@ exports.sendNewComplaintNotificationToAdmins = functions.database
 
     try {
       // 1. Get all admin users
-      const usersSnapshot = await admin.database().ref('/users').once('value');
-      const users = usersSnapshot.val();
+      // Optimized: query only admin users instead of loading the full /users tree
       const adminTokens = [];
+      const adminsSnapshot = await admin.database()
+        .ref('/users')
+        .orderByChild('isAdmin')
+        .equalTo(true)
+        .once('value');
 
-      if (users) {
-        for (const userId in users) {
-          if (users[userId].isAdmin === true && users[userId].fcmToken) {
-            adminTokens.push(users[userId].fcmToken);
+      if (adminsSnapshot.exists()) {
+        adminsSnapshot.forEach(childSnap => {
+          const data = childSnap.val();
+          if (data && data.fcmToken) {
+            adminTokens.push(data.fcmToken);
           }
-        }
+        });
       }
 
       if (adminTokens.length === 0) {
@@ -252,10 +257,11 @@ exports.sendNewComplaintNotificationToAdmins = functions.database
       }
 
       // 2. Construct the notification message using FCM HTTP v1 API format
+      const issueTypeText = complaint && complaint.issue_type ? `: ${complaint.issue_type}` : '';
       const message = {
         notification: {
           title: 'New Complaint Registered',
-          body: `A new complaint has been registered: ${complaint.issue_type}`,
+          body: `A new complaint has been registered${issueTypeText}`,
         },
         data: {
           complaintId: complaintId,
@@ -279,8 +285,18 @@ exports.sendNewComplaintNotificationToAdmins = functions.database
           timeout: 10000, // 10 seconds timeout
         });
 
-        // Attach retry-axios interceptor
-        rax(axiosInstance);
+        // Attach retry-axios interceptor with custom retry configuration
+        rax.attach(axiosInstance);
+        axiosInstance.defaults.raxConfig = {
+          retry: 3,
+          noResponseRetries: 2,
+          retryDelay: 1000, // initial retry delay in ms
+          backoffType: 'exponential',
+          onRetryAttempt: err => {
+            const cfg = rax.getConfig(err);
+            console.log(`Retry attempt #${cfg.currentRetryAttempt} for admin notification`);
+          }
+        };
 
         return axiosInstance.post(
           `https://fcm.googleapis.com/v1/projects/${process.env.GCLOUD_PROJECT}/messages:send`,
@@ -292,9 +308,9 @@ exports.sendNewComplaintNotificationToAdmins = functions.database
 
       responses.forEach((result, index) => {
         if (result.status === 'fulfilled') {
-          console.log(`Successfully sent notification to admin with token: ${adminTokens[index]}`);
+          console.log(`Successfully sent notification to admin at index ${index}.`);
         } else {
-          console.error(`Failed to send notification to admin with token: ${adminTokens[index]}`, result.reason);
+          console.error(`Failed to send notification to admin at index ${index}.`, result.reason);
         }
       });
 
